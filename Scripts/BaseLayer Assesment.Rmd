@@ -1,0 +1,185 @@
+---
+title: "Base layer proof of concept"
+author: "Maximiliano Micheli"
+date: "15 March 2022"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=TRUE, message=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(tidyr)
+library(sp)
+library(raster)
+library(rgeos)
+
+library(viridis)
+library(gridExtra)
+library(mapview)
+library(stars)
+library(sf)
+set.seed(1)
+
+```
+
+## Using SA2 as a base layer
+
+Here we upload our SA2 layer, transform it to a meters CRS and filter a few SA2 codes to keep work simple
+
+```{r , message = FALSE, echo = FALSE, results = FALSE}
+# Uploading SA2
+SA2 <- st_read('C:/Users/Maxi/Documents/GitHub/Base-Layer/Datasets/SA2_2021_GDA94/SA2_2021_AUST_GDA94.shp')
+
+# Uploading ARKS
+ARKS <- st_read('C:/Users/Maxi/Documents/GitHub/Base-Layer/Datasets/Biodiversity_KoalaPrioritisationProjectNSW_ARKS/KoalaPrioritisationProjectNSW_ARKS.shp')
+ARKS <- st_transform(ARKS, crs = 3577)
+
+# Transform CRS
+SA2$AREASQKM21[SA2$STE_CODE21 == 1]
+SA2 <- st_transform(SA2, 3577)
+SA2$area_calc <- st_area(SA2)
+
+# Filter NSW
+SA2 <- SA2[SA2$STE_CODE21 == 1,]
+
+# Testing for some SA2
+port <- SA2[SA2$SA2_CODE21 == '106031119'|SA2$SA2_CODE21 == '106031120'|SA2$SA2_CODE21 == '106031121'|SA2$SA2_CODE21 == '106031124'|SA2$SA2_CODE21 == '106031125'| SA2$SA2_CODE21 == '106031132'|SA2$SA2_CODE21 == '106031122' | SA2$SA2_CODE21 =='111031232',]
+#
+```
+
+
+
+## Plot of selected area
+
+Map of the selected areas for base layer 
+
+```{r pressure, echo=FALSE}
+mapview(port)
+```
+
+
+## Making a grid of the selected area
+
+This poses some questions that is good to answer at this stage of what we are doing:
+
+- Is the selection of SA2 as the base layer a good choice?
+Criteria:
+1) stability in time
+2) accuracy in the description state's territory
+
+- Is the size of the grid relevant? Should we build a small grid (with high computing costs but very detailed information) or a big grid (with low computing costs but not too detailed information). For example, if we have a grid with 1km cells and land use with 50m cells, this will lead to high imprecision when aggregating to our 1km cells. 
+
+- Is the form of the grid relevant? We need to analyze if there is a trade off between using squared grid or hexagon grdi
+
+```{r}
+
+# test
+port <- st_cast(port, "POLYGON")
+port$area_calc <- st_area(port)
+BaseGrid <- st_make_grid(port, 250, square = FALSE)
+mapview(BaseGrid)
+
+```
+
+Now the displayed grid contains all the SA2 areas. But the grid cells are partitioned at some point. They are not comparable between them. However, if the structure stays the same they are comparable among layers and in time (if al use this same mother layer.)
+
+On the other hand, having cells that are not complete generates a problem of aggregation (unless we have an attribute such as SA2).
+
+```{r}
+
+#test$area_calc = st_area(test)
+#mapview(test)
+#sum(test$area_calc)
+#sum(port$area_calc)
+
+new <- st_intersection(st_as_sf(BaseGrid),port)
+new$area_calc <- st_area(new)
+mapview(new)
+
+
+```
+
+```{r, include = FALSE}
+
+sum(port$area_calc)
+sum(new$area_calc)
+```
+
+```{r, include = FALSE}
+############ testeando los resultados #################
+ver1 <- port %>% 
+  st_drop_geometry %>% 
+  dplyr::group_by(SA2_CODE21) %>% 
+  dplyr::summarize(area_original = sum(area_calc))
+
+ver2 <- new %>% 
+  st_drop_geometry %>% 
+  dplyr::group_by(SA2_CODE21) %>% 
+  dplyr::summarize(area_hexagon = sum(area_calc))
+
+comparison <-merge(ver1,ver2, by = 'SA2_CODE21') ### port 2 is a solid candidate for grid
+comparison$ratio <- comparison$area_original/comparison$area_hexagon
+
+```
+
+We can see that our new hexagonal layer has the same overall area for all the SA2 and for each of them. This means it keeps the area constant, which is a good outcome in terms of precision. The trade-off in this case, is that our hexagons are partitioned, so we won't keep them. In terms of our product, it doesn't change much.
+
+```{r}
+comparison
+```
+
+# Adding another layer to our BaseLayer
+
+```{r}
+new_layer <- st_join(new,ARKS[,c('PoRS_Name')], left = T, largest = TRUE )
+
+
+#mapview(ARKS, col.regions = 'red')
+```
+
+Checking that areas remain the same
+```{r}
+sum(new_layer$area_calc)
+sum(st_area(new_layer))
+```
+
+Checking that internal areas for SA2 stay the same
+
+```{r, include = FALSE}
+############ testeando los resultados #################
+ver1 <- port %>% 
+  st_drop_geometry %>% 
+  dplyr::group_by(SA2_CODE21) %>% 
+  dplyr::summarize(area_original = sum(area_calc))
+
+ver2 <- new_layer %>% 
+  st_drop_geometry %>% 
+  dplyr::group_by(SA2_CODE21) %>% 
+  dplyr::summarize(area_hexagon = sum(area_calc))
+
+comparison <-merge(ver1,ver2, by = 'SA2_CODE21') ### port 2 is a solid candidate for grid
+comparison$ratio <- comparison$area_original/comparison$area_hexagon
+
+```
+
+```{r}
+comparison
+```
+
+Checking results for ARKS Areas
+
+```{r}
+mapview(new_layer)+ mapview(ARKS, col.regions = 'red')
+
+
+```
+
+We can see that the share of ARKS will change after intersecting with the new layer, because the base layer doesn't contain areas that the ARKS area has. So this is a risk
+
+- If an area of an attribute layer falls outside of our base layer, what do we do to that?
+- As we are working with an intersection method, a cell will get the attributes of another layer if a very tiny portion of the latter intersects the former. 
+- When we intersect with more than three features on a cell, we are keeping the feature that intersects in it's largest area
+
