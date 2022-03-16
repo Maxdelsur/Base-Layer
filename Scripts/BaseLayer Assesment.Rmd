@@ -25,6 +25,48 @@ set.seed(1)
 
 ```
 
+## Why a basic spatial unit (or base layer)?
+
+When performing an intersection of two layers, there are certain part of the polygons that are lost. Imagine the following two polygons, which are close to be the same but they are in slightly different places
+
+```{r}
+set.seed(131)
+library(sf)
+m = rbind(c(0,0), c(1,0), c(1,1), c(0,1), c(0,0))
+p = st_polygon(list(m))
+n = 2
+l = vector("list", n)
+for (i in 1:n)
+  l[[i]] = p + 0.25 * runif(2)
+s = st_sfc(l)
+plot(s, col = sf.colors(categorical = TRUE, alpha = .5))
+title("overlapping squares")
+```
+
+When doing an intersection (red colour) of these two, the resulting area is smaller than the original area of both squares. This mean that part of this area is lost in the process. If we add another slightly different layer, probably the total area will change. Moreover, the shape of the result will change, which will lead to different shapes depending on what we are intersecting. 
+
+```{r}
+sf_s <- st_as_sf(s)
+inter <- st_intersection(sf_s[1,],sf_s[,])
+sf_s2<- rbind(sf_s,inter)
+plot(sf_s2, col = sf.colors(categorical = TRUE, alpha = .5))
+```
+
+If there was a Basic Spatial Unit (BSU), that confidently represents the area we want to work with, we wouldn't care of areas that lay outside the BSU. Having a graph of this, we can see that our two shapes now overlay in a BSU, where all the features get captured in each cell. This allows that any attributes that we add in the future are consistent spatially to allow comparisons over time. The BSU always stays the same, and each of the cells in this grid absorbs the attributes of the overlaying shapes.
+
+
+```{r}
+m = rbind(c(0,0), c(1.25,0), c(1.25,1.25), c(0,1.25), c(0,0))
+p = st_polygon(list(m))
+s = st_sfc(p)
+grid <- st_make_grid(s)
+
+vec <- c(1,2)
+sf_s$cat <- vec
+mapview(grid)+mapview(sf_s, zcol ='cat')
+```
+
+
 ## Using SA2 as a base layer
 
 Here we upload our SA2 layer, transform it to a meters CRS and filter a few SA2 codes to keep work simple
@@ -67,12 +109,13 @@ This poses some questions that is good to answer at this stage of what we are do
 
 - Is the selection of SA2 as the base layer a good choice?
 Criteria:
-1) stability in time
-2) accuracy in the description state's territory
+1) Stability in time and space - Our base layer should serve to the purpose of bringing stability among all of our products and to be stable in time. 
+2) Accuracy in the description state's territory: the base layer should be reliable, since all the area calculations and comparisons are going to be based on this territory. 
 
-- Is the size of the grid relevant? Should we build a small grid (with high computing costs but very detailed information) or a big grid (with low computing costs but not too detailed information). For example, if we have a grid with 1km cells and land use with 50m cells, this will lead to high imprecision when aggregating to our 1km cells. 
+- Is the size of the grid relevant? Should we build a small grid (with high computing costs but very detailed information) or a big grid (with low computing costs but not too detailed information). For example, if we have a grid with 1km cells and land use with 50m cells, this will lead to high imprecision when aggregating land use to our 1km cells. 
 
-- Is the form of the grid relevant? We need to analyze if there is a trade off between using squared grid or hexagon grdi
+- Is the form of the grid relevant? 
+We need to analyze if there is a trade off between using squared grid or hexagonal grid
 
 ```{r}
 
@@ -84,7 +127,7 @@ mapview(BaseGrid)
 
 ```
 
-Now the displayed grid contains all the SA2 areas. But the grid cells are partitioned at some point. They are not comparable between them. However, if the structure stays the same they are comparable among layers and in time (if al use this same mother layer.)
+Now the displayed grid contains all the SA2 areas. The grid cells are partitioned at some point. They are not comparable between them. However, if the structure stays the same they are comparable in time (if al use this same BSU) and with other layers that use the same BSU. 
 
 On the other hand, having cells that are not complete generates a problem of aggregation (unless we have an attribute such as SA2).
 
@@ -125,7 +168,9 @@ comparison$ratio <- comparison$area_original/comparison$area_hexagon
 
 ```
 
-We can see that our new hexagonal layer has the same overall area for all the SA2 and for each of them. This means it keeps the area constant, which is a good outcome in terms of precision. The trade-off in this case, is that our hexagons are partitioned, so we won't keep them. In terms of our product, it doesn't change much.
+We can see that our new hexagonal layer has the same overall area for all the SA2 and for each of them in the original file. This means it keeps the area constant, which is a good outcome in terms of precision. 
+
+The trade-off in this case, is that our hexagons are partitioned at some point, so we won't keep them in it's original shape. In terms of our product, it doesn't change much. We've now got a base layer that accurately represents our original file.
 
 ```{r}
 comparison
@@ -135,10 +180,15 @@ comparison
 
 ```{r}
 new_layer <- st_join(new,ARKS[,c('PoRS_Name')], left = T, largest = TRUE )
-
-
+new_layer$geometry_type <- st_geometry_type(new_layer)
+new_layer <- new_layer[new_layer$geometry_type!='POINT',]
 #mapview(ARKS, col.regions = 'red')
 ```
+
+```{r}
+table(new_layer$geometry_type)
+```
+
 
 Checking that areas remain the same
 ```{r}
